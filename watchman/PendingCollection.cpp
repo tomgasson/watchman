@@ -248,7 +248,8 @@ void PendingChanges::consolidateItem(
   p->flags.set(
       flags &
       (W_PENDING_CRAWL_ONLY | W_PENDING_RECURSIVE |
-       W_PENDING_NONRECURSIVE_SCAN | W_PENDING_IS_DESYNCED));
+       W_PENDING_NONRECURSIVE_SCAN | W_PENDING_IS_DESYNCED |
+       W_PENDING_VIA_NOTIFY));
 
   maybePruneObsoletedChildren(p->path, p->flags);
 }

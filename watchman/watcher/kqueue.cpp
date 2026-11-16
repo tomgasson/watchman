@@ -290,7 +290,13 @@ Watcher::ConsumeNotifyRet KQueueWatcher::consumeNotify(
       wlock->fd_to_name.erase(fd);
     }
 
-    PendingFlags flags = W_PENDING_VIA_NOTIFY;
+    // A read-only mmap can emit NOTE_ATTRIB while changing only atime.
+    // Let statPath compare meaningful metadata for attribute-only file events.
+    // Keep the force-change hint for writes (including mixed/coalesced events)
+    // and directory notifications, whose cookie/scanning semantics need it.
+    PendingFlags flags = (!is_dir && fflags == NOTE_ATTRIB)
+        ? PendingFlags::raw(0)
+        : W_PENDING_VIA_NOTIFY;
     if (!is_dir) {
       // TODO(xavierd): I believe we need this in case a file is replaced by a
       // directory.

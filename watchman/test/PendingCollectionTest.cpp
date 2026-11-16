@@ -69,6 +69,45 @@ size_t process_items(PendingCollection::LockedPtr& coll) {
 
 } // namespace
 
+// A metadata-only kqueue event may be queued before a write to the same file.
+// The write's force-change hint must survive both insertion and queue merging.
+TEST(Pending, write_upgrades_metadata_check) {
+  PendingChanges pending;
+  const w_string path{"/root/file"};
+  const auto now = std::chrono::system_clock::now();
+  pending.add(path, now, W_PENDING_RECURSIVE);
+  pending.add(path, now, W_PENDING_RECURSIVE | W_PENDING_VIA_NOTIFY);
+  auto item = pending.stealItems();
+  ASSERT_NE(nullptr, item);
+  EXPECT_TRUE(item->flags.contains(W_PENDING_VIA_NOTIFY));
+  EXPECT_EQ(nullptr, item->next);
+}
+
+TEST(Pending, merged_write_upgrades_metadata_check) {
+  PendingChanges pending;
+  PendingChanges writes;
+  const w_string path{"/root/file"};
+  const auto now = std::chrono::system_clock::now();
+  pending.add(path, now, W_PENDING_RECURSIVE);
+  writes.add(path, now, W_PENDING_RECURSIVE | W_PENDING_VIA_NOTIFY);
+  pending.append(writes.stealItems(), {});
+  auto item = pending.stealItems();
+  ASSERT_NE(nullptr, item);
+  EXPECT_TRUE(item->flags.contains(W_PENDING_VIA_NOTIFY));
+  EXPECT_EQ(nullptr, item->next);
+}
+
+TEST(Pending, metadata_check_preserves_queued_write) {
+  PendingChanges pending;
+  const w_string path{"/root/file"};
+  const auto now = std::chrono::system_clock::now();
+  pending.add(path, now, W_PENDING_RECURSIVE | W_PENDING_VIA_NOTIFY);
+  pending.add(path, now, W_PENDING_RECURSIVE);
+  auto item = pending.stealItems();
+  ASSERT_NE(nullptr, item);
+  EXPECT_TRUE(item->flags.contains(W_PENDING_VIA_NOTIFY));
+}
+
 // Simulate
 TEST(Pending, bench) {
   // These parameters give us 262140 items to track
