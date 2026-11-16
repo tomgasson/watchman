@@ -69,43 +69,65 @@ size_t process_items(PendingCollection::LockedPtr& coll) {
 
 } // namespace
 
-// A metadata-only kqueue event may be queued before a write to the same file.
-// The write's force-change hint must survive both insertion and queue merging.
-TEST(Pending, write_upgrades_metadata_check) {
-  PendingChanges pending;
+// Attribute checks must not hide a write, regardless of arrival order or
+// whether the watcher queue is appended to the IO thread's pending queue.
+TEST(Pending, attribute_and_write_coalescing) {
+  const auto attrib = W_PENDING_VIA_NOTIFY | W_PENDING_ATTRIB_ONLY;
+  const auto write = W_PENDING_VIA_NOTIFY;
+  const auto crawl = W_PENDING_NONRECURSIVE_SCAN;
   const w_string path{"/root/file"};
   const auto now = std::chrono::system_clock::now();
-  pending.add(path, now, W_PENDING_RECURSIVE);
-  pending.add(path, now, W_PENDING_RECURSIVE | W_PENDING_VIA_NOTIFY);
-  auto item = pending.stealItems();
-  ASSERT_NE(nullptr, item);
-  EXPECT_TRUE(item->flags.contains(W_PENDING_VIA_NOTIFY));
-  EXPECT_EQ(nullptr, item->next);
+  for (bool append : {false, true}) {
+    for (auto first : {attrib, write, crawl}) {
+      for (auto second : {attrib, write, crawl}) {
+        PendingChanges pending;
+        pending.add(path, now, first);
+        if (append) {
+          PendingChanges incoming;
+          incoming.add(path, now, second);
+          pending.append(incoming.stealItems(), {});
+        } else {
+          pending.add(path, now, second);
+        }
+        auto item = pending.stealItems();
+        ASSERT_NE(nullptr, item);
+        EXPECT_EQ(
+            first.contains(W_PENDING_ATTRIB_ONLY) && second != write,
+            item->flags.contains(W_PENDING_ATTRIB_ONLY));
+        // Existing provenance is deliberately not ORed during consolidation.
+        EXPECT_EQ(first.contains(W_PENDING_VIA_NOTIFY),
+                  item->flags.contains(W_PENDING_VIA_NOTIFY));
+      }
+    }
+  }
 }
 
-TEST(Pending, merged_write_upgrades_metadata_check) {
-  PendingChanges pending;
-  PendingChanges writes;
+// For all old flag combinations, preserve the pre-fix consolidation rule.
+TEST(Pending, legacy_flags_keep_existing_semantics) {
   const w_string path{"/root/file"};
   const auto now = std::chrono::system_clock::now();
-  pending.add(path, now, W_PENDING_RECURSIVE);
-  writes.add(path, now, W_PENDING_RECURSIVE | W_PENDING_VIA_NOTIFY);
-  pending.append(writes.stealItems(), {});
-  auto item = pending.stealItems();
-  ASSERT_NE(nullptr, item);
-  EXPECT_TRUE(item->flags.contains(W_PENDING_VIA_NOTIFY));
-  EXPECT_EQ(nullptr, item->next);
-}
-
-TEST(Pending, metadata_check_preserves_queued_write) {
-  PendingChanges pending;
-  const w_string path{"/root/file"};
-  const auto now = std::chrono::system_clock::now();
-  pending.add(path, now, W_PENDING_RECURSIVE | W_PENDING_VIA_NOTIFY);
-  pending.add(path, now, W_PENDING_RECURSIVE);
-  auto item = pending.stealItems();
-  ASSERT_NE(nullptr, item);
-  EXPECT_TRUE(item->flags.contains(W_PENDING_VIA_NOTIFY));
+  const auto merged = W_PENDING_CRAWL_ONLY | W_PENDING_RECURSIVE |
+      W_PENDING_NONRECURSIVE_SCAN | W_PENDING_IS_DESYNCED;
+  for (bool append : {false, true}) {
+    for (unsigned first = 0; first < 64; ++first) {
+      for (unsigned second = 0; second < 64; ++second) {
+        PendingChanges pending;
+        auto a = PendingFlags::raw(first);
+        auto b = PendingFlags::raw(second);
+        pending.add(path, now, a);
+        if (append) {
+          PendingChanges incoming;
+          incoming.add(path, now, b);
+          pending.append(incoming.stealItems(), {});
+        } else {
+          pending.add(path, now, b);
+        }
+        auto item = pending.stealItems();
+        ASSERT_NE(nullptr, item);
+        EXPECT_EQ(a | (b & merged), item->flags);
+      }
+    }
+  }
 }
 
 // Simulate

@@ -841,6 +841,8 @@ void InMemoryView::statPath(
     const FileInformation* pre_stat) {
   bool recursive = pending.flags.contains(W_PENDING_RECURSIVE);
   const bool via_notify = pending.flags.contains(W_PENDING_VIA_NOTIFY);
+  const bool force_notify =
+      via_notify && !pending.flags.contains(W_PENDING_ATTRIB_ONLY);
   const PendingFlags desynced_flag = pending.flags & W_PENDING_IS_DESYNCED;
 
   // viaPwalk is true iff calling from crawlerParallel.
@@ -992,13 +994,13 @@ void InMemoryView::statPath(
        * to crawl it again */
       recursive = true;
     }
-    if (!file->exists || via_notify || did_file_change(&file->stat, &st)) {
+    if (!file->exists || force_notify || did_file_change(&file->stat, &st)) {
       logf(
           DBG,
           "file changed exists={} via_notify={} stat-changed={} isdir={} size={} {}\n",
           file->exists,
           via_notify,
-          file->exists && !via_notify,
+          file->exists && !force_notify,
           st.isDir(),
           st.size,
           path);

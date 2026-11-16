@@ -146,6 +146,39 @@ TEST_P(InMemoryViewTest, respond_to_watcher_events) {
   EXPECT_EQ(100, two.get("size").asInt());
 }
 
+// Regresses read-only mmap -> atime -> NOTE_ATTRIB -> spurious subscription
+// changes. Use the real IO thread and query view, with both crawl strategies.
+TEST_P(InMemoryViewTest, attribute_only_checks_meaningful_metadata) {
+  const char* path = FAKEFS_ROOT "root/file.txt";
+  fs.defineContents({path});
+  auto root = std::make_shared<Root>(
+      fs, root_path, "fs_type", w_string_to_json("{}"), config, view, [] {});
+  InMemoryView::IoThreadState state{std::chrono::minutes(5)};
+  ASSERT_EQ(Continue::Continue, view->stepIoThread(root, state, pending));
+
+  auto check = [&](PendingFlags flags, size_t expected) {
+    auto before = view->getMostRecentRootNumberAndTickValue();
+    pending.lock()->add(path, {}, flags);
+    pending.lock()->ping();
+    ASSERT_EQ(Continue::Continue, view->stepIoThread(root, state, pending));
+    Query query;
+    query.fieldList.add("name");
+    QueryContext ctx{&query, root, false};
+    ctx.since = QuerySince::Clock{false, before.ticks};
+    view->timeGenerator(&query, &ctx);
+    EXPECT_EQ(expected, ctx.resultsArray.size());
+  };
+  const auto attrib = W_PENDING_VIA_NOTIFY | W_PENDING_ATTRIB_ONLY;
+  fs.updateMetadata(path, [](FileInformation& fi) { ++fi.atime.tv_sec; });
+  check(attrib, 0);
+  fs.updateMetadata(path, [](FileInformation& fi) { fi.mode ^= 0100; });
+  check(attrib, 1);
+  fs.updateMetadata(path, [](FileInformation& fi) { ++fi.ctime.tv_sec; });
+  check(attrib, 1);
+  // A write with identical stat fields must retain unconditional reporting.
+  check(W_PENDING_VIA_NOTIFY, 1);
+}
+
 TEST_P(InMemoryViewTest, wait_for_respond_to_watcher_events) {
   getLog().setStdErrLoggingLevel(DBG);
 

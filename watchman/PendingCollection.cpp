@@ -20,6 +20,7 @@ const PendingFlags::NameTable PendingFlags::table = {
     {W_PENDING_RECURSIVE, "RECURSIVE"},
     {W_PENDING_NONRECURSIVE_SCAN, "NONRECURSIVE_SCAN"},
     {W_PENDING_VIA_NOTIFY, "VIA_NOTIFY"},
+    {W_PENDING_ATTRIB_ONLY, "ATTRIB_ONLY"},
     {W_PENDING_IS_DESYNCED, "IS_DESYNCED"},
 };
 
@@ -248,8 +249,16 @@ void PendingChanges::consolidateItem(
   p->flags.set(
       flags &
       (W_PENDING_CRAWL_ONLY | W_PENDING_RECURSIVE |
-       W_PENDING_NONRECURSIVE_SCAN | W_PENDING_IS_DESYNCED |
-       W_PENDING_VIA_NOTIFY));
+       W_PENDING_NONRECURSIVE_SCAN | W_PENDING_IS_DESYNCED));
+
+  // ATTRIB_ONLY relaxes unconditional reporting for one kqueue event. If a
+  // write/rename/etc. follows it, retain the stronger watcher's evidence even
+  // if stat fields match. Crawls are not evidence of a write. Do not change
+  // provenance coalescing: existing backends keep their previous semantics.
+  if (flags.contains(W_PENDING_VIA_NOTIFY) &&
+      !flags.contains(W_PENDING_ATTRIB_ONLY)) {
+    p->flags.clear(W_PENDING_ATTRIB_ONLY);
+  }
 
   maybePruneObsoletedChildren(p->path, p->flags);
 }

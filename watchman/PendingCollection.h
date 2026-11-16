@@ -46,7 +46,9 @@ constexpr inline auto W_PENDING_RECURSIVE = PendingFlags::raw(1);
 constexpr inline auto W_PENDING_NONRECURSIVE_SCAN = PendingFlags::raw(2);
 
 /**
- * This change event came from a watcher.
+ * This change event came from a watcher. Unless ATTRIB_ONLY is set, statPath
+ * reports the file changed even when its cached metadata still matches.
+ * This preserves writes that restore metadata or occur at coarse resolution.
  *
  * Crawler uses this to distinguish between crawler-originated events and
  * watcher-originated events.
@@ -81,6 +83,20 @@ constexpr inline auto W_PENDING_IS_DESYNCED = PendingFlags::raw(16);
  * Missing pre_stat can be treated as deletion without extra stat().
  */
 constexpr inline auto W_PENDING_VIA_PWALK = PendingFlags::raw(32);
+
+/**
+ * A kqueue non-directory notification containing only NOTE_ATTRIB.
+ *
+ * Still a watcher event (VIA_NOTIFY), including for cookie discovery, but it
+ * requests the normal stat comparison rather than unconditionally reporting a
+ * change. That comparison ignores atime and detects mode, ownership, size,
+ * inode, mtime and ctime changes. A read-only mmap can update only atime.
+ *
+ * A coalesced non-attribute watcher event must clear this hint: a real write
+ * must retain the existing unconditional-change behavior. Crawls cannot add
+ * the hint or upgrade it into evidence of a write.
+ */
+constexpr inline auto W_PENDING_ATTRIB_ONLY = PendingFlags::raw(64);
 
 /**
  * Represents a change notification from the Watcher.

@@ -290,13 +290,14 @@ Watcher::ConsumeNotifyRet KQueueWatcher::consumeNotify(
       wlock->fd_to_name.erase(fd);
     }
 
-    // A read-only mmap can emit NOTE_ATTRIB while changing only atime.
-    // Let statPath compare meaningful metadata for attribute-only file events.
-    // Keep the force-change hint for writes (including mixed/coalesced events)
-    // and directory notifications, whose cookie/scanning semantics need it.
-    PendingFlags flags = (!is_dir && fflags == NOTE_ATTRIB)
-        ? PendingFlags::raw(0)
-        : W_PENDING_VIA_NOTIFY;
+    PendingFlags flags = W_PENDING_VIA_NOTIFY;
+    // NOTE_ATTRIB includes atime updates caused by read-only mmap. Preserve
+    // watcher provenance (including cookie discovery), but let statPath's
+    // existing meaningful-metadata comparison decide whether to report it.
+    // Directories and mixed events retain unconditional change reporting.
+    if (!is_dir && fflags == NOTE_ATTRIB) {
+      flags |= W_PENDING_ATTRIB_ONLY;
+    }
     if (!is_dir) {
       // TODO(xavierd): I believe we need this in case a file is replaced by a
       // directory.
