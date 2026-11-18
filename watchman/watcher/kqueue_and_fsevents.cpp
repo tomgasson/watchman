@@ -9,6 +9,7 @@
 
 #if HAVE_FSEVENTS && defined(HAVE_KQUEUE)
 
+#include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
 #include <condition_variable>
 #include <mutex>
@@ -29,14 +30,29 @@ class PendingEventsCond {
    *
    * Return true if this thread should stop, false otherwise.
    */
-  bool notifyOneOrStop() {
+  bool notifyOneOrStop(bool waitForConsume = false) {
     auto lock = stop_.lock();
     if (lock->shouldStop) {
       return true;
     }
     lock->hasPending = true;
     cond_.notify_one();
-    return false;
+    if (waitForConsume) {
+      auto generation = lock->consumedGeneration;
+      // Nested waitNotify() is level-triggered: it remains Ready until
+      // consumeNotify() drains the queue. Wait for that drain instead of
+      // repeatedly waking the aggregate consumer and contending on stop_.
+      consumedCond_.wait(lock.as_lock(), [&] {
+        return lock->shouldStop || lock->consumedGeneration != generation;
+      });
+    }
+    return lock->shouldStop;
+  }
+
+  void didConsume() {
+    auto lock = stop_.lock();
+    ++lock->consumedGeneration;
+    consumedCond_.notify_all();
   }
 
   /**
@@ -72,16 +88,19 @@ class PendingEventsCond {
     auto lock = stop_.lock();
     lock->shouldStop = true;
     cond_.notify_all();
+    consumedCond_.notify_all();
   }
 
  private:
   struct Inner {
     bool shouldStop = false;
     bool hasPending = false;
+    uint64_t consumedGeneration{0};
   };
 
   folly::Synchronized<Inner, std::mutex> stop_;
   std::condition_variable cond_;
+  std::condition_variable consumedCond_;
 };
 
 /**
@@ -151,7 +170,7 @@ bool startThread(
       }
       auto waitResult = watcher->waitNotify(86400);
       if (waitResult == Watcher::WaitNotifyResult::Ready) {
-        if (cond->notifyOneOrStop()) {
+        if (cond->notifyOneOrStop(true)) {
           return;
         }
       } else if (
@@ -218,12 +237,14 @@ std::unique_ptr<DirHandle> KQueueAndFSEventsWatcher::startWatchDir(
         auto [it, _] = wlock->emplace(
             fullPath,
             std::make_shared<FSEventsWatcher>(
-                root->root_path, root->config, std::optional(fullPath)));
+                root->root_path,
+                root->config,
+                std::optional(fullPath),
+                [condition = pendingCondition_] {
+                  condition->notifyOneOrStop();
+                }));
         const auto& watcher = it->second;
         if (!watcher->start(root)) {
-          throw std::runtime_error("couldn't start fsEvent");
-        }
-        if (!startThread(root, watcher, pendingCondition_)) {
           throw std::runtime_error("couldn't start fsEvent");
         }
       }
@@ -247,6 +268,12 @@ bool KQueueAndFSEventsWatcher::startWatchFile(struct watchman_file* file) {
 Watcher::ConsumeNotifyRet KQueueAndFSEventsWatcher::consumeNotify(
     const std::shared_ptr<Root>& root,
     PendingChanges& coll) {
+  SCOPE_EXIT {
+    // Always release bridges, including on cancellation and exceptions.
+    // A notification that raced with this pass stays pending; its bridge
+    // rechecks the nested queue after this acknowledgement.
+    pendingCondition_->didConsume();
+  };
   {
     auto guard = injectedRecrawl_.wlock();
     if (guard->has_value()) {

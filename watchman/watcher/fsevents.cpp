@@ -314,7 +314,7 @@ propagate:
   if (!items.empty()) {
     auto wlock = watcher->items_.lock();
     wlock->items.push_back(std::move(items));
-    watcher->fseCond_.notify_one();
+    watcher->notifyEventsReady();
   }
 }
 
@@ -561,10 +561,12 @@ void FSEventsWatcher::FSEventsThread(const std::shared_ptr<Root>& root) {
 FSEventsWatcher::FSEventsWatcher(
     bool hasFileWatching,
     const Configuration& config,
-    std::optional<w_string> dir)
+    std::optional<w_string> dir,
+    std::function<void()> onEventsReady)
     : Watcher(
           hasFileWatching ? "fsevents" : "dirfsevents",
           hasFileWatching ? WATCHER_HAS_PER_FILE_NOTIFICATIONS : 0),
+      onEventsReady_{std::move(onEventsReady)},
       attemptResyncOnDrop_{config.getBool("fsevents_try_resync", false)},
       hasFileWatching_{hasFileWatching},
       enableStreamFlush_{config.getBool("fsevents_enable_stream_flush", true)},
@@ -576,11 +578,13 @@ FSEventsWatcher::FSEventsWatcher(
 FSEventsWatcher::FSEventsWatcher(
     const w_string& /*root_path*/,
     const Configuration& config,
-    std::optional<w_string> dir)
+    std::optional<w_string> dir,
+    std::function<void()> onEventsReady)
     : FSEventsWatcher(
           config.getBool("fsevents_watch_files", true),
           config,
-          dir) {
+          dir,
+          std::move(onEventsReady)) {
   json_int_t fsevents_ring_log_size =
       config.getInt("fsevents_ring_log_size", 0);
   if (fsevents_ring_log_size) {
@@ -680,8 +684,16 @@ folly::SemiFuture<folly::Unit> FSEventsWatcher::flushPendingEvents() {
   // processed by InMemoryView.
   auto wlock = items_.lock();
   wlock->syncs.push_back(std::move(p));
-  fseCond_.notify_one();
+  notifyEventsReady();
   return std::move(f);
+}
+
+void FSEventsWatcher::notifyEventsReady() {
+  if (onEventsReady_) {
+    onEventsReady_();
+  } else {
+    fseCond_.notify_one();
+  }
 }
 
 Watcher::WaitNotifyResult FSEventsWatcher::waitNotify(int timeoutms) {

@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include "watchman/RingBuffer.h"
 #include "watchman/fs/Pipe.h"
@@ -35,12 +36,14 @@ class FSEventsWatcher : public Watcher {
   explicit FSEventsWatcher(
       bool hasFileWatching,
       const Configuration& config,
-      std::optional<w_string> dir = std::nullopt);
+      std::optional<w_string> dir = std::nullopt,
+      std::function<void()> onEventsReady = {});
 
   explicit FSEventsWatcher(
       const w_string& root_path,
       const Configuration& config,
-      std::optional<w_string> dir = std::nullopt);
+      std::optional<w_string> dir = std::nullopt,
+      std::function<void()> onEventsReady = {});
   ~FSEventsWatcher();
 
   bool start(const std::shared_ptr<Root>& root) override;
@@ -80,6 +83,10 @@ class FSEventsWatcher : public Watcher {
       const FSEventStreamEventFlags eventFlags[],
       const FSEventStreamEventId eventIds[]);
 
+  // Set only for nested watchers; called after queuing events or flush markers.
+  // This lets the split watcher wake its consumer without a forwarding thread.
+  const std::function<void()> onEventsReady_;
+  void notifyEventsReady();
   watchman::Pipe fsePipe_;
 
   std::condition_variable fseCond_;
