@@ -62,6 +62,7 @@ class InMemoryFileResult final : public FileResult {
   std::optional<ClockStamp> ctime() override;
   std::optional<ClockStamp> otime() override;
   std::optional<FileResult::ContentHash> getContentSha1() override;
+  std::optional<FileResult::ContentHash> getContentGitSha1() override;
   void batchFetchProperties(
       const std::vector<std::unique_ptr<FileResult>>& files) override;
 
@@ -71,6 +72,7 @@ class InMemoryFileResult final : public FileResult {
   InMemoryViewCaches& caches_;
   std::optional<ResolvedSymlink> symlinkTarget_;
   Result<FileResult::ContentHash> contentSha1_;
+  Result<FileResult::ContentHash> contentGitSha1_;
 };
 
 /**

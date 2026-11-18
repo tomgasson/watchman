@@ -68,6 +68,10 @@ class FileResult {
   using ContentHash = std::array<uint8_t, 20>;
   virtual std::optional<ContentHash> getContentSha1() = 0;
 
+  // SHA-1 of the Git blob header followed by the raw working-tree bytes.
+  // Views may override this to use their asynchronous content cache.
+  virtual std::optional<ContentHash> getContentGitSha1();
+
   // Maybe return the dtype.
   // Returns folly::none if the dtype is not currently known.
   // Returns DType::Unknown if we have dtype data but it doesn't
@@ -106,6 +110,8 @@ class FileResult {
     SymlinkTarget = 1 << 8,
     // Need full stat metadata
     FullFileInformation = 1 << 9,
+    // Need SHA-1 of the Git blob header and raw file contents
+    ContentGitSha1 = 1 << 10,
   };
 
   // Perform a batch fetch to fill in some missing data.

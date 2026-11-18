@@ -144,6 +144,21 @@ _Since 4.9._
   encoded as 40 hexidecimal digits (e.g.
   `"da39a3ee5e6b4b0d3255bfef95601890afd80709"` for an empty file)
 
+- `content.gitsha1hex` - string: SHA-1 of the Git blob header followed by
+  the file's raw working-tree bytes, encoded as 40 hexadecimal digits. For an
+  empty file this is `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391`. Check the
+  `field-content.gitsha1hex` capability before requesting this field.
+  Deleted files, directories and symbolic links return `null`; other failures
+  use the same `{"error": "..."}` representation as `content.sha1hex`.
+
+  The digest is `SHA1("blob " + decimal_byte_length + "\0" + file_bytes)`.
+  It does not apply Git clean filters, line-ending normalization, or read the
+  index. These transformations can make it differ from the indexed blob OID.
+  Git repositories using SHA-256 object IDs are not represented by this field.
+  For in-memory watches, the existing cache capacity is shared by both digest
+  types; warming continues to populate only `content.sha1hex`. Other views may
+  read or materialize local file contents to compute this field.
+
 ### Synchronization timeout (since 2.1)
 
 By default a `query` will wait for up to 60 seconds for the view of the

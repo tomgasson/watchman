@@ -12,6 +12,8 @@
 #include "watchman/watchman_system.h"
 
 namespace watchman {
+enum class ContentHashKind : uint8_t { Sha1, GitBlobSha1 };
+
 struct ContentHashCacheKey {
   // Path relative to the watched root
   w_string relativePath;
@@ -19,6 +21,7 @@ struct ContentHashCacheKey {
   size_t fileSize;
   // The modification time
   struct timespec mtime;
+  ContentHashKind kind{ContentHashKind::Sha1};
 
   // Computes a hash value for use in the cache map
   std::size_t hashValue() const;
@@ -65,7 +68,9 @@ class ContentHashCache {
   // Compute the hash value for a given input.
   // This will block the calling thread while the I/O is performed.
   // Throws exceptions for any errors that may occur.
-  static HashValue computeHashImmediate(const char* fullPath);
+  static HashValue computeHashImmediate(
+      const char* fullPath,
+      ContentHashKind kind = ContentHashKind::Sha1);
 
   // Compute the hash value for a given input via the thread pool.
   // Returns a future to operate on the result of this async operation

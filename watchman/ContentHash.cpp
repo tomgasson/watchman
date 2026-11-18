@@ -26,13 +26,27 @@
 
 namespace watchman {
 
+namespace {
+
+bool isSameFileVersion(
+    const FileInformation& before,
+    const FileInformation& after) {
+  return after.isFile() && after.ino == before.ino && after.dev == before.dev &&
+      after.size == before.size && after.mtime.tv_sec == before.mtime.tv_sec &&
+      after.mtime.tv_nsec == before.mtime.tv_nsec &&
+      after.ctime.tv_sec == before.ctime.tv_sec &&
+      after.ctime.tv_nsec == before.ctime.tv_nsec;
+}
+
+} // namespace
+
 using HashValue = typename ContentHashCache::HashValue;
 using Node = typename ContentHashCache::Node;
 
 bool ContentHashCacheKey::operator==(const ContentHashCacheKey& other) const {
   return fileSize == other.fileSize && mtime.tv_sec == other.mtime.tv_sec &&
       mtime.tv_nsec == other.mtime.tv_nsec &&
-      relativePath == other.relativePath;
+      relativePath == other.relativePath && kind == other.kind;
 }
 
 std::size_t ContentHashCacheKey::hashValue() const {
@@ -40,7 +54,8 @@ std::size_t ContentHashCacheKey::hashValue() const {
       {relativePath.hashValue(),
        fileSize,
        static_cast<uint64_t>(mtime.tv_sec),
-       static_cast<uint64_t>(mtime.tv_nsec)});
+       static_cast<uint64_t>(mtime.tv_nsec),
+       static_cast<uint64_t>(kind)});
 }
 
 ContentHashCache::ContentHashCache(
@@ -55,7 +70,9 @@ folly::Future<std::shared_ptr<const Node>> ContentHashCache::get(
       key, [this](const ContentHashCacheKey& k) { return computeHash(k); });
 }
 
-HashValue ContentHashCache::computeHashImmediate(const char* fullPath) {
+HashValue ContentHashCache::computeHashImmediate(
+    const char* fullPath,
+    ContentHashKind kind) {
   HashValue result;
   uint8_t buf[8192];
 
@@ -65,9 +82,24 @@ HashValue ContentHashCache::computeHashImmediate(const char* fullPath) {
         errno, std::generic_category(), fmt::format("w_stm_open {}", fullPath));
   }
 
+  std::optional<FileInformation> initial;
+  std::string header;
+  uint64_t bytesRead = 0;
+  if (kind == ContentHashKind::GitBlobSha1) {
+    initial = stm->getFileDescriptor().getInfo();
+    if (!initial->isFile()) {
+      throw std::system_error(std::make_error_code(std::errc::is_a_directory));
+    }
+    header = fmt::format("blob {}", initial->size);
+    header.push_back('\0');
+  }
+
 #ifndef _WIN32
   SHA_CTX ctx;
   SHA1_Init(&ctx);
+  if (!header.empty()) {
+    SHA1_Update(&ctx, header.data(), header.size());
+  }
 
   while (true) {
     auto n = stm->read(buf, sizeof(buf));
@@ -80,6 +112,7 @@ HashValue ContentHashCache::computeHashImmediate(const char* fullPath) {
           std::generic_category(),
           fmt::format("while reading from {}", fullPath));
     }
+    bytesRead += n;
     SHA1_Update(&ctx, buf, n);
   }
 
@@ -110,6 +143,15 @@ HashValue ContentHashCache::computeHashImmediate(const char* fullPath) {
   SCOPE_EXIT {
     CryptDestroyHash(ctx);
   };
+  if (!header.empty() &&
+      !CryptHashData(
+          ctx,
+          reinterpret_cast<const BYTE*>(header.data()),
+          static_cast<DWORD>(header.size()),
+          0)) {
+    throw std::system_error(
+        GetLastError(), std::system_category(), "CryptHashData header");
+  }
 
   while (true) {
     auto n = stm->read(buf, sizeof(buf));
@@ -123,6 +165,7 @@ HashValue ContentHashCache::computeHashImmediate(const char* fullPath) {
           fmt::format("while reading from {}", fullPath));
     }
 
+    bytesRead += n;
     if (!CryptHashData(ctx, buf, n, 0)) {
       throw std::system_error(
           GetLastError(), std::system_category(), "CryptHashData");
@@ -135,13 +178,24 @@ HashValue ContentHashCache::computeHashImmediate(const char* fullPath) {
         GetLastError(), std::system_category(), "CryptGetHashParam HP_HASHVAL");
   }
 #endif
+  if (initial) {
+    auto final = stm->getFileDescriptor().getInfo();
+    // Ensure the pathname still names the descriptor we read. Abstract views
+    // such as Eden provide size/mtime but may not provide an inode or device.
+    auto named = getFileInformation(fullPath);
+    if (bytesRead != initial->size || !isSameFileVersion(*initial, final) ||
+        !isSameFileVersion(*initial, named)) {
+      throw std::runtime_error(
+          "metadata changed during Git blob hashing; query again");
+    }
+  }
   return result;
 }
 
 HashValue ContentHashCache::computeHashImmediate(
     const ContentHashCacheKey& key) const {
   auto fullPath = w_string::pathCat({rootPath_, key.relativePath});
-  auto result = computeHashImmediate(fullPath.c_str());
+  auto result = computeHashImmediate(fullPath.c_str(), key.kind);
 
   // Since TOCTOU is everywhere and everything, double check to make sure that
   // the file looks like we were expecting at the start.  If it isn't, then

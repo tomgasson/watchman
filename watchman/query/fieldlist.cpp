@@ -32,9 +32,10 @@ std::optional<json_ref> make_symlink(FileResult* file, const QueryContext*) {
   }
 }
 
+template <bool GitBlob>
 std::optional<json_ref> make_sha1_hex(FileResult* file, const QueryContext*) {
   try {
-    auto hash = file->getContentSha1();
+    auto hash = GitBlob ? file->getContentGitSha1() : file->getContentSha1();
     if (!hash.has_value()) {
       // Need to load it still
       return std::nullopt;
@@ -292,7 +293,8 @@ std::unordered_map<w_string, QueryFieldRenderer> build_defs() {
       {"oclock", make_oclock},
       {"cclock", make_cclock},
       {"type", make_type_field},
-      {"content.sha1hex", make_sha1_hex},
+      {"content.sha1hex", make_sha1_hex<false>},
+      {"content.gitsha1hex", make_sha1_hex<true>},
   };
   std::unordered_map<w_string, QueryFieldRenderer> map;
   for (auto& def : defs) {

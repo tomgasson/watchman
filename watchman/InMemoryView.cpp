@@ -125,7 +125,13 @@ void InMemoryFileResult::batchFetchProperties(
       }
     }
 
-    if (file->neededProperties() & FileResult::Property::ContentSha1) {
+    for (auto kind : {ContentHashKind::Sha1, ContentHashKind::GitBlobSha1}) {
+      auto property = kind == ContentHashKind::Sha1
+          ? FileResult::Property::ContentSha1
+          : FileResult::Property::ContentGitSha1;
+      if (!(file->neededProperties() & property)) {
+        continue;
+      }
       auto dir = file->dirName();
       dir.advance(file->caches_.contentHashCache.rootPath().size());
 
@@ -139,13 +145,17 @@ void InMemoryFileResult::batchFetchProperties(
       ContentHashCacheKey key{
           w_string::pathCat({dir, file->baseName()}),
           size_t(file->file_->stat.size),
-          file->file_->stat.mtime};
+          file->file_->stat.mtime,
+          kind};
 
       sha1Futures.emplace_back(caches_.contentHashCache.get(key).thenTry(
-          [file](
+          [file, kind](
               folly::Try<std::shared_ptr<const ContentHashCache::Node>>&&
                   result) {
-            file->contentSha1_ =
+            auto& destination = kind == ContentHashKind::Sha1
+                ? file->contentSha1_
+                : file->contentGitSha1_;
+            destination =
                 makeResultWith([&] { return result.value()->value(); });
           }));
     }
@@ -229,6 +239,21 @@ std::optional<FileResult::ContentHash> InMemoryFileResult::getContentSha1() {
     return std::nullopt;
   }
   return contentSha1_.value();
+}
+
+std::optional<FileResult::ContentHash> InMemoryFileResult::getContentGitSha1() {
+  if (!file_->exists) {
+    throw std::system_error(
+        std::make_error_code(std::errc::no_such_file_or_directory));
+  }
+  if (!file_->stat.isFile()) {
+    throw std::system_error(std::make_error_code(std::errc::is_a_directory));
+  }
+  if (contentGitSha1_.empty()) {
+    accessorNeedsProperties(FileResult::Property::ContentGitSha1);
+    return std::nullopt;
+  }
+  return contentGitSha1_.value();
 }
 
 ViewDatabase::ViewDatabase(const w_string& root_path)
