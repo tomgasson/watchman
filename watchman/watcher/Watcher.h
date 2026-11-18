@@ -42,6 +42,12 @@ class Watcher : public std::enable_shared_from_this<Watcher> {
 #define WATCHER_HAS_SPLIT_WATCH 4
   unsigned flags;
 
+  // Whether changes to entries in this directory are reported individually.
+  // A mixed watcher may answer differently for its root and nested directories.
+  virtual bool hasPerFileNotifications(w_string_piece /*directory*/) const {
+    return flags & WATCHER_HAS_PER_FILE_NOTIFICATIONS;
+  }
+
   Watcher(const char* name, unsigned flags);
 
   Watcher(Watcher&&) = delete;

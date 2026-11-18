@@ -97,6 +97,11 @@ class KQueueAndFSEventsWatcher : public Watcher {
       const Configuration& config);
 
   bool start(const std::shared_ptr<Root>& root) override;
+  bool hasPerFileNotifications(w_string_piece directory) const override {
+    // Root entries are discovered by scanning after a kqueue notification.
+    // Nested entries come from file-level FSEvents when enabled.
+    return nestedFileEvents_ && directory != rootPath_;
+  }
 
   folly::SemiFuture<folly::Unit> flushPendingEvents() override;
 
@@ -120,6 +125,8 @@ class KQueueAndFSEventsWatcher : public Watcher {
   void injectRecrawl(w_string path);
 
  private:
+  const w_string rootPath_;
+  const bool nestedFileEvents_;
   folly::Synchronized<
       std::unordered_map<w_string, std::shared_ptr<FSEventsWatcher>>>
       fseventWatchers_;
@@ -134,6 +141,8 @@ KQueueAndFSEventsWatcher::KQueueAndFSEventsWatcher(
     const w_string& root_path,
     const Configuration& config)
     : Watcher("kqueue+fsevents", WATCHER_HAS_SPLIT_WATCH),
+      rootPath_(root_path),
+      nestedFileEvents_(config.getBool("fsevents_watch_files", true)),
       kqueueWatcher_(std::make_shared<KQueueWatcher>(root_path, config, false)),
       pendingCondition_(std::make_shared<PendingEventsCond>()) {}
 
@@ -214,7 +223,6 @@ std::unique_ptr<DirHandle> KQueueAndFSEventsWatcher::startWatchDir(
             DBG,
             "Creating a new FSEventsWatcher for top-level directory {}\n",
             fullPath);
-        root->cookies.addCookieDir(fullPath);
         auto [it, _] = wlock->emplace(
             fullPath,
             std::make_shared<FSEventsWatcher>(
@@ -226,6 +234,9 @@ std::unique_ptr<DirHandle> KQueueAndFSEventsWatcher::startWatchDir(
         if (!startThread(root, watcher, pendingCondition_)) {
           throw std::runtime_error("couldn't start fsEvent");
         }
+        // Queries must not create cookies here until the stream is listening.
+        // A cookie created before SinceNow starts may have no file event.
+        root->cookies.addCookieDir(fullPath);
       }
     }
   }

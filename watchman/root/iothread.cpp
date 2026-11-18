@@ -396,7 +396,7 @@ void InMemoryView::processPath(
    */
   if (root->cookies.isCookiePrefix(pending.path)) {
     bool consider_cookie;
-    if (watcher_->flags & WATCHER_HAS_PER_FILE_NOTIFICATIONS) {
+    if (watcher_->hasPerFileNotifications(pending.path.piece().dirName())) {
       // The watcher gives us file level notification, thus only consider
       // cookies if this path is coming directly from the watcher, not from a
       // recursive crawl.
@@ -1058,7 +1058,7 @@ void InMemoryView::statPath(
               desynced_flag | W_PENDING_NONRECURSIVE_SCAN |
                   W_PENDING_CRAWL_ONLY);
         } else {
-          if (watcher_->flags & WATCHER_HAS_PER_FILE_NOTIFICATIONS) {
+          if (watcher_->hasPerFileNotifications(pending.path)) {
             /* we get told about changes on the child, so we don't need to do
              * anything */
           } else {
