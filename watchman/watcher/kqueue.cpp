@@ -62,7 +62,7 @@ KQueueWatcher::KQueueWatcher(
     const Configuration& config,
     bool recursive)
     : Watcher("kqueue", 0),
-      maps_(maps(config.getInt(CFG_HINT_NUM_DIRS, HINT_NUM_DIRS))),
+      maps_(maps(recursive ? config.getInt(CFG_HINT_NUM_DIRS, HINT_NUM_DIRS) : 0)),
       recursive_(recursive) {
   kq_fd = FileDescriptor(kqueue(), "kqueue", FileDescriptor::FDType::Generic);
   kq_fd.setCloExec();

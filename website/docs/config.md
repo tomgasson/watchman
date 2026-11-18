@@ -330,6 +330,9 @@ Making this number too large is potentially wasteful of memory. Making this
 number too small results in increased latency during crawling while the hash
 tables are rebuilt.
 
+The `kqueue+fsevents` backend uses kqueue only for the root directory and
+root-level files. Those maps grow on demand without this whole-tree reservation.
+
 ### suppress_recrawl_warnings
 
 _Since 4.7_
